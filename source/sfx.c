@@ -68,12 +68,12 @@ void deinterlaceSFX(SFX_s* s, char* filename)
 	{
           s->ldata[i] = data[i]; 
           s->rdata[i] = data[i+1];
-        } else //16bit 
+        } else //16bit [left][left][right][right] ...
         for(i=0;i<s->size;i+=4)
 	{
           s->ldata[i] = data[i];
-          s->rdata[i] = data[i+1];
-          s->ldata[i+1] = data[i+2];
+          s->ldata[i+1] = data[i+1];
+          s->rdata[i] = data[i+2];
           s->rdata[i+1] = data[i+3];
         };
 
