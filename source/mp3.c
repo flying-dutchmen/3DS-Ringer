@@ -1,156 +1,273 @@
-//for use with helix
-//found --> https://translate.google.ca/translate?hl=en&sl=zh-CN&u=http://bbs.eeworld.com.cn/forum.php%3Fmod%3Dviewthread%26action%3Dprintable%26tid%3D452352&prev=search
+//for use with mad
+//found --> https://translate.google.ca/translate?hl=en&sl=zh-CN&u=http://www.360doc.com/content/11/0212/13/1317564_92407413.shtml&prev=search
 //revised Kenny.D Lee
 
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
+#include <malloc.h>
+#include <unistd.h>
+
 #include <3ds.h>
-#include "helix/mp3dec.h"
+#include "sfx.h"
+#include "mad.h"
 
-static void mp3_player (const char * filename)
+ #define BUFSIZE 8192 
+ 
+ /* 
+ * This is a private message structure. A generic pointer to this structure 
+ * is passed to each of the callback functions. Put here any data you need 
+ * to access from within the callbacks. 
+ */ 
+ struct buffer { 
+ FILE *fp; /*file pointer*/ 
+ unsigned int flen; /*file length*/ 
+ unsigned int fpos; /*current position*/ 
+ unsigned char fbuf[BUFSIZE]; /*buffer*/ 
+ unsigned int fbsize; /*indeed size of buffer*/ 
+ }; 
+ typedef struct buffer mp3_file; 
+ 
+
+ FILE * soundL; 
+ FILE * soundR; //soundcard file
+
+ unsigned int prerate = 0; //the pre simple rate 
+ 
+
+ int writeL(int c) 
+ { 
+ return fwrite((char *)&c, 1, 1, soundL); 
+ } 
+
+ int writeR(int c) 
+ { 
+ return fwrite((char *)&c, 1, 1, soundR); 
+ } 
+ 
+ void set_dsp() 
+ { 
+// int format = AFMT_S16_LE; 
+// int channels = 2; 
+ 
+ soundL = open("/dev/dsp/right.raw", "wb+");
+ soundR = open("/dev/dsp/left.raw", "wb+"); 
+ } 
+
+
+ /* 
+ * This is perhaps the simplest example use of the MAD high-level API. 
+ * Standard input is mapped into memory via mmap(), then the high-level API 
+ * is invoked with three callbacks: input, output, and error. The output 
+ * callback converts MAD's high-resolution PCM samples to 16 bits, then 
+ * writes them to standard output in little-endian, stereo-interleaved 
+ * format. 
+ */ 
+ 
+ static int decode(mp3_file *mp3fp); 
+  
+ /* 
+ * This is the input callback. The purpose of this callback is to (re)fill 
+ * the stream buffer which is to be decoded. In this example, an entire file 
+ * has been mapped into memory, so we just call mad_stream_buffer() with the 
+ * address and length of the mapping. When this callback is called a second 
+ * time, we are finished decoding. 
+ */ 
+ 
+ static 
+ enum mad_flow input(void *data, 
+ struct mad_stream *stream) 
+ { 
+ mp3_file *mp3fp; 
+ int ret_code; 
+ int unproc_data_size; /*the unprocessed data's size*/ 
+ int copy_size; 
+ 
+ mp3fp = (mp3_file *)data; 
+ if(mp3fp->fpos < mp3fp->flen) 
+ { 
+ unproc_data_size = stream->bufend - stream->next_frame; 
+ memcpy(mp3fp->fbuf, mp3fp->fbuf+mp3fp->fbsize-unproc_data_size, unproc_data_size); 
+ copy_size = BUFSIZE - unproc_data_size; 
+ if(mp3fp->fpos + copy_size > mp3fp->flen) 
+ { 
+ copy_size = mp3fp->flen - mp3fp->fpos; 
+ } 
+ fread(mp3fp->fbuf+unproc_data_size, 1, copy_size, mp3fp->fp); 
+ mp3fp->fbsize = unproc_data_size + copy_size; 
+ mp3fp->fpos += copy_size; 
+ 
+ /*Hand off the buffer to the mp3 input stream*/ 
+ mad_stream_buffer(stream, mp3fp->fbuf, mp3fp->fbsize); 
+ ret_code = MAD_FLOW_CONTINUE; 
+ } 
+ else 
+ { 
+ ret_code = MAD_FLOW_STOP; 
+ } 
+ 
+ return ret_code; 
+ 
+ } 
+ 
+ /* 
+ * The following utility routine performs simple rounding, clipping, and 
+ * scaling of MAD's high-resolution samples down to 16 bits. It does not 
+ * perform any dithering or noise shaping, which would be recommended to 
+ * obtain any exceptional audio quality. It is therefore not recommended to 
+ * use this routine if high-quality output is desired. 
+ */ 
+ 
+ static inline 
+ signed int scale(mad_fixed_t sample) 
+ { 
+  /* round */
+  sample += (1L << (MAD_F_FRACBITS - 16));
+
+  /* clip */
+  if (sample >= MAD_F_ONE)
+    sample = MAD_F_ONE - 1;
+  else if (sample < -MAD_F_ONE)
+    sample = -MAD_F_ONE;
+
+  /* quantize */
+  return sample >> (MAD_F_FRACBITS + 1 - 16);
+ } 
+ 
+ /* 
+ * This is the output callback function. It is called after each frame of 
+ * MPEG audio data has been completely decoded. The purpose of this callback 
+ * is to output (or play) the decoded PCM audio. 
+ */ 
+ 
+ static 
+ enum mad_flow output(void *data, 
+ struct mad_header const *header, 
+ struct mad_pcm *pcm) 
+ { 
+ unsigned int nchannels, nsamples; 
+ unsigned int rate; 
+ mad_fixed_t const *left_ch, *right_ch; 
+ 
+ /* pcm->samplerate contains the sampling frequency */ 
+ 
+ rate= pcm->samplerate; 
+ nchannels = pcm->channels; 
+ nsamples = pcm->length; 
+ left_ch = pcm->samples[0]; 
+ right_ch = pcm->samples[1]; 
+ 
+ /* update the sample rate of dsp*/ 
+// if(rate != prerate) 
+ { 
+// ioctl(soundfd, SNDCTL_DSP_SPEED, &rate); 
+// prerate = rate; 
+ } 
+ 
+ while (nsamples--) { 
+ signed int sample; 
+ 
+ /* output sample(s) in 16-bit signed little-endian PCM */ 
+ 
+ sample = scale(*left_ch++); 
+ writeL((sample >> 0) & 0xff); 
+ writeL((sample >> 8) & 0xff); 
+ 
+ if (nchannels == 2) { 
+ sample = scale(*right_ch++); 
+ writeR((sample >> 0) & 0xff); 
+ writeR((sample >> 8) & 0xff); 
+ } 
+ } 
+ 
+ return MAD_FLOW_CONTINUE; 
+ } 
+ 
+ /* 
+ * This is the error callback function. It is called whenever a decoding 
+ * error occurs. The error is indicated by stream->error; the list of 
+ * possible MAD_ERROR_* errors can be found in the mad.h (or stream.h) 
+ * header file. 
+ */ 
+ 
+ static enum mad_flow error(void *data, 
+ struct mad_stream *stream, 
+ struct mad_frame *frame) 
+ { 
+ mp3_file *mp3fp = data; 
+ 
+ fprintf(stderr, "decoding error 0x%04x (%s) at byte offset %u\n", 
+ stream->error, mad_stream_errorstr(stream), 
+ stream->this_frame - mp3fp->fbuf); 
+ 
+ /* return MAD_FLOW_BREAK here to stop decoding (and propagate an error) */ 
+ 
+ return MAD_FLOW_CONTINUE; 
+ } 
+ 
+ /* 
+ * This is the function called by main() above to perform all the decoding. 
+ * It instantiates a decoder object and configures it with the input, 
+ * output, and error callback functions above. A single call to 
+ * mad_decoder_run() continues until a callback function returns 
+ * MAD_FLOW_STOP (to stop decoding) or MAD_FLOW_BREAK (to stop decoding and 
+ * signal an error). 
+ */ 
+ 
+ static int decode(mp3_file *mp3fp) 
+ { 
+ struct mad_decoder decoder; 
+ int result; 
+ 
+ /* configure input, output, and error functions */ 
+ mad_decoder_init(&decoder, mp3fp, 
+ input, 0 /* header */, 0 /* filter */, output, 
+ error, 0 /* message */); 
+ 
+ /* start decoding */ 
+ result = mad_decoder_run(&decoder, MAD_DECODER_MODE_SYNC); 
+ 
+ /* release the decoder */ 
+ mad_decoder_finish(&decoder); 
+ 
+ return result; 
+ } 
+
+void mp3_player(const char * filename)
 {
-int err, i, outputSamps, current_sample_rate = 0;
 
-FILE *fres;
-short *outBuf[8196];
-u32 bufflag;
-int read_offset = 0; /* read offset pointer */
-int bytes_left = 0; /* number of remaining bytes */
-unsigned long Frames = 0; /* mp3 frame count */
-unsigned char * buffer;
-unsigned char * read_ptr = buffer; /* buffer pointer */
-HMP3Decoder Mp3Decoder; /* mp3 decoder pointer */
-MP3FrameInfo FrameInfo;
+ long flen, fsta, fend; 
+ int dlen; 
+ mp3_file *mp3fp; 
+ 
+ mp3fp = (mp3_file *)malloc(sizeof(mp3_file)); 
+ if((mp3fp->fp = fopen(filename, "rb+")) == NULL) 
+ { 
+ printf("can't open source file.\n"); 
+ return 2; 
+ }
+ printf("opened file: s% \n!", filename); gfxFlushBuffers(); 
+ fsta = ftell(mp3fp->fp); 
+ fseek(mp3fp->fp, 0, SEEK_END); 
+ fend = ftell(mp3fp->fp); 
+ flen = fend - fsta; 
+// if(flen fp, 0, SEEK_SET);
 
-// Open an audio file
-fres = fopen(filename, "rb+");
-// Open failure
-//if (fres != FR_OK)
-//{
-//printf ("read file% s error open another file \ r \ n!", filename);
-//fres = f_close (& file);
-//}
+ rewind (mp3fp->fp);
+ fread(mp3fp->fbuf, 1, BUFSIZE, mp3fp->fp); 
+ mp3fp->fbsize = BUFSIZE; 
+ mp3fp->fpos = BUFSIZE; 
+ mp3fp->flen = flen; 
+ 
+ set_dsp(); 
 
-// Open success
-// Initialize the MP3 decoder
-Mp3Decoder = MP3InitDecoder();
+ printf("decode file: s% \n!", filename); gfxFlushBuffers();  
+ decode(mp3fp); 
+ 
+ fclose(soundL); 
+ fclose(soundR); 
+ fclose(mp3fp->fp); 
 
-// Get the input data stream, call the helix library decoded output PCM data
-while (1)
-{
-// Read MP3 files
-read_ptr = buffer; // point to the MP3 input stream
-bytes_left = fread(buffer, 1, sizeof(buffer), fres); // read the actual size of the input stream
-
-while (1)
-{
-read_offset = MP3FindSyncWord (read_ptr, bytes_left); // looking for frame synchronization, return to the sync word
-if (read_offset <0) // did not find the frame synchronization
-{
-break; // out of the loop //
-}
-
-read_ptr += read_offset; // shift to the position of the synchronization word
-bytes_left -= read_offset; // size of the data after the synchronization word
-if (bytes_left <1024) // supplemental data
-{
-/* Use DMA to read, filled 4-byte alignment */
-i = (u32)(bytes_left) & 3; // determine excess bytes
-if (i) i = 4-i; // Need to add byte
-memcpy (buffer + i, read_ptr, bytes_left); // copy from its starting position
-read_ptr = buffer + i; // pointing to its location data
-bytes_left += fread(buffer + bytes_left + i, 1, sizeof (buffer) -bytes_left-i, fres); // valid data stream size
-}
-err = MP3Decode (Mp3Decoder, &read_ptr, &bytes_left, outBuf[bufflag], 0); // start decoding
-Frames ++;
-
-if (err != ERR_MP3_NONE) // error handling
-{
-switch (err)
-{
-case ERR_MP3_INDATA_UNDERFLOW:
-printf ("ERR_MP3_INDATA_UNDERFLOW \ r \ n");
-read_ptr = buffer;
-bytes_left = fread(read_ptr, 1, sizeof(buffer), fres);
-break;
-
-case ERR_MP3_MAINDATA_UNDERFLOW:
-/* Do nothing - next call to decode will provide more mainData */
-printf ("ERR_MP3_MAINDATA_UNDERFLOW \ r \ n");
-break;
-
-        default:
-printf ("UNKNOWN ERROR:% d \ r \ n", err);
-                       
-// Skip this frame
-if (bytes_left> 0)
-{
-bytes_left-- ;
-read_ptr++ ;
-}
-break; // program should be in here to Hard fault
-}
-}
-else // decoding error, output PCM
-{
-MP3GetLastFrameInfo (Mp3Decoder, &FrameInfo); // Get the decoded information
-
-/* Set the sample rate based on the decoded information */
-if (FrameInfo.samprate != current_sample_rate) // sample rate
-{
-current_sample_rate = FrameInfo.samprate;
-
-printf ("\ r \ n Bitrate% dKbps", FrameInfo.bitrate / 1000);
-printf ("\ r \ n Samprate% dHz", current_sample_rate);
-printf ("\ r \ n BitsPerSample% db", FrameInfo.bitsPerSample);
-printf ("\ r \ n nChans% d", FrameInfo.nChans);
-printf ("\ r \ n Layer% d", FrameInfo.layer);
-printf ("\ r \ n Version% d", FrameInfo.version);
-printf ("\ r \ n OutputSamps% d", FrameInfo.outputSamps);
-
-//if (current_sample_rate> = I2S_AudioFreq_Default)
-{
-//CODEC_I2S_Configuration (current_sample_rate); // modify I2S rate according to the sampling rate
-
-}
-}
-
-/* Output dac */
-outputSamps = FrameInfo.outputSamps; // PCM number of data
-
-if (outputSamps> 0)
-{
-if (FrameInfo.nChans == 1) // Mono
-{
-// Copy the data to a single channel to another channel
-for (i = outputSamps - 1; i >= 0; i--)
-{
-outBuf[bufflag] [i * 2] = outBuf[bufflag];
-outBuf[bufflag] [i * 2 + 1] = outBuf[bufflag];
-}
-outputSamps *= 2;
-}
-
-//Audio_MAL_Play ((uint32_t) outBuf [bufflag], outputSamps);
-//while (XferCplt == 0) /* wait for DMA transfert complete */
-{} /* You can write some code for operate on UDA1380 */
-//XferCplt = 0;
-//bufflag = 1 -bufflag;
-}
-}
-
-
-//if (file.fptr == file.fsize) // file pointer to the end of the file, the data read
-//{
-//printf (" \ r \ n");
-//break;
-//}
-
-}
-
-}
-printf ("\ r \ n Close decoder");
-MP3FreeDecoder (Mp3Decoder);
-
-fclose(fres); // close the file
+ printf("finished file: s% \n!", filename); gfxFlushBuffers(); 
+ return 0; 
 }
