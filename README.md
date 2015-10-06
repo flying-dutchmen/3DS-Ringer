@@ -1,13 +1,13 @@
 # 3DS-Ringer, wii fête the ulaw
 ##A sounds sytem for the Nintendo 3DS platform
 
-simple demo &or example  
+simple Monophonic demo &or example  
 
 SFX_s *gunSFX1, *gunSFX2;  
 	gunSFX1=createSFX("sdmc:/content/portalgun_orange.raw", SOUND_FORMAT_16BIT, 22050, false);  
-	gunSFX2=createSFX("/content/portalgun_blue.raw", SOUND_FORMAT_16BIT, 22050, false);  
+//	gunSFX2=createSFX("/content/portalgun_blue.raw", SOUND_FORMAT_16BIT, 22050, false);  
 	playSFX(gunSFX1);  
-	playSFX(gunSFX1);  
+//	playSFX(gunSFX2);  
   
 libmad usage needs debuged & etc ... todo  
 Sound SFX forked from --https://github.com/smealum/portal3DS  
