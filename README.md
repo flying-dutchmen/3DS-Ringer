@@ -1,4 +1,4 @@
-# 3DS-Ringer a sound system the Nintendo 3DS
+# 3DS-Ringer for the Nintendo 3DS platform
 remedies for "toilet-talking radio gong-shows with extra unknown comedians"
 
 Needs some debugging, sorting out & etc ... todo  
